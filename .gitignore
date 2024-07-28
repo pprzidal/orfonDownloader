@@ -1,0 +1,5 @@
+node_modules
+etwas*
+*.tar.xz
+output*
+manifest.mpd
