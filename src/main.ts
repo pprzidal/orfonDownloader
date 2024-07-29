@@ -33,15 +33,13 @@ async function getManifestUrl(url: string): Promise<string | undefined> {
 }
 
 async function fetchAndParseManifestFile(manifestUrl: string): Promise<{baseUrl: string, videoAdaptionSet: AdaptionSet, audioAdaptionSet: AdaptionSet}> {
-    console.log("manifestUrl", manifestUrl);
+    logger.info(`manifestUrl as found in .html file: ${manifestUrl}`);
     const resp = await fetch(manifestUrl);
-    //console.log(JSON.stringify(resp, undefined, '  '));
-    console.log("resp final url", resp.url);
+    logger.info(`found manifest file on: ${resp.url}`);
     const baseUrl = resp.url.substring(0, resp.url.lastIndexOf("/") + 1)
-    console.log("baseUrl", baseUrl);
+    logger.info(`baseUrl: ${baseUrl}`);
     const asText = await resp.text();
     const parser = new XMLParser({
-        //preserveOrder: true,
         parseAttributeValue: true,
         ignoreAttributes: false,
     });
@@ -49,8 +47,6 @@ async function fetchAndParseManifestFile(manifestUrl: string): Promise<{baseUrl:
     const adaptionSets = document.MPD.Period.AdaptationSet as Array<any>;
     const videoAdaptionSet = mapRawAdaptionSetToDs(adaptionSets.find(z => z["@_mimeType"] === "video/mp4"));
     const audioAdaptionSet = mapRawAdaptionSetToDs(adaptionSets.find(z => z["@_mimeType"] === "audio/mp4"))
-    /*console.log("video\n",JSON.stringify(videoAdaptionSet, undefined, '  '));
-    console.log("audio\n",JSON.stringify(audioAdaptionSet, undefined, '  '));*/
     return {
         baseUrl,
         videoAdaptionSet,
@@ -108,7 +104,7 @@ function mapRawAdaptionSetToDs(adaptionSetRaw: any): AdaptionSet {
 }
 
 // TODO refactor
-function partionArray<T>(arr: Array<T>, chunksize: number): Array<Array<T>> {
+function partitionArray<T>(arr: Array<T>, chunksize: number): Array<Array<T>> {
     const res = [];
     for (let i = 0; i < arr.length; i += chunksize) {
         const chunk = arr.slice(i, i + chunksize);
@@ -117,54 +113,72 @@ function partionArray<T>(arr: Array<T>, chunksize: number): Array<Array<T>> {
     return res;
 }
 
-async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, baseUrl: string, filename: string) {
+async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string) {
     let time = 0;
     const lastPaths = adaptionSet.segmentTemplate.segmentTimeline.segments.flatMap((s) => {
         let reps = 1;
         if(s.r) reps += s.r;
         const agg = [];
         for(let i = 0; i < reps; i++) {
-            const lastPath = (adaptionSet.segmentTemplate.media.replace("$RepresentationID$", adaptionSet.id).replace("$Time$", `${time}`));
+            const lastPath = (adaptionSet.segmentTemplate.media.replace("$RepresentationID$", representationId).replace("$Time$", `${time}`));
             agg.push(lastPath);
             time += s.d;
         }
         return agg;
     });
     // also insert the init thingy
-    lastPaths.unshift(adaptionSet.segmentTemplate.initialization.replace("$RepresentationID$", adaptionSet.id));
+    lastPaths.unshift(adaptionSet.segmentTemplate.initialization.replace("$RepresentationID$", representationId));
     logger.info(`For the video there are ${lastPaths.length} segments to Download`)
     // TODO make chunksize flexible (but be careful with to high chunksizes, we dont want to get blocked (if orf on even does it?))
-    const chunkedLastPaths = partionArray(lastPaths, 10);
+    const chunkSize = 10;
+    const chunkedLastPaths = partitionArray(lastPaths, chunkSize);
     // TODO figure out how to make write stream to file work
     /*const writeStream = Writable.toWeb(fs.createWriteStream("./output", {
         autoClose: false,
     }));*/
-    for(const chunk of chunkedLastPaths) {
-        const bodyStreams = await Promise.all(chunk.map(async c => {
-            const resp = await fetch(baseUrl + c);
-            return resp.arrayBuffer();
-        }))
-        for(const z of bodyStreams) {
-            //if(z) await z.pipeTo(writeStream);
-            fs.appendFileSync("./output", Buffer.from(z));
-            logger.info("here");
+    const file = fs.openSync(filename, "as");
+    let chunkCnt = 0;
+    try {
+        for(const chunk of chunkedLastPaths) {
+            const bodyStreams = await Promise.all(chunk.map(async c => {
+                const resp = await fetch(baseUrl + c);
+                return resp.arrayBuffer();
+            }))
+            for(const z of bodyStreams) {
+                fs.appendFileSync(file, Buffer.from(z));
+            }
+            chunkCnt += chunk.length;
+            logger.info("processed another " + chunk.length + " chunks. " + chunkCnt + "/" + lastPaths.length + " = " + (chunkCnt / lastPaths.length * 100).toFixed(2) + " %")
         }
-        /*bodyStreams.forEach(async z => {
-            if(z) await z.pipeTo(writeStream)
-        })*/
+    } finally {
+        fs.close(file);   
     }
 }
 
 async function main() {
-    const manifestUrl = await getManifestUrl("https://on.orf.at/video/14235745/venus-serena-aus-dem-ghetto-nach-wimbledon");
-    if(!manifestUrl) {
-        logger.error("There was a problem retrieving the url of the manifest file. Maybe the given url is isnt a on.orf.at/video url")
-        logger.error("Exiting")
-        return;   
+    if(!args['--links']) {
+        logger.error("No links to download were given");
+        return;
     }
-    const { baseUrl, audioAdaptionSet, videoAdaptionSet } = await fetchAndParseManifestFile(manifestUrl);
-    const representation = videoAdaptionSet.representations[0];
-    downloadSegmentsAndSaveToFile(videoAdaptionSet, baseUrl, "./output");
+    for(const link of args['--links']) {
+        logger.info(`starting procedure for ${link}`)
+        const manifestUrl = await getManifestUrl(link);
+        if(!manifestUrl) {
+            logger.error("There was a problem retrieving the url of the manifest file. Maybe the given url is isnt a on.orf.at/video url")
+            logger.error("Exiting")
+            return;   
+        }
+        const { baseUrl, audioAdaptionSet, videoAdaptionSet } = await fetchAndParseManifestFile(manifestUrl);
+        const videoRepresentation = (videoAdaptionSet.representations as VideoRepresentation[]).sort((a, b) => {
+            return b.height - a.height;
+        }).at(0);
+        const audioRepresentation = (audioAdaptionSet.representations as AudioRepresentation[]).at(0)
+        if(!videoRepresentation || !audioRepresentation) {
+            return;
+        }
+        downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, "./output");
+        downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, "./output_audio");
+    }
 }
 
 main()
