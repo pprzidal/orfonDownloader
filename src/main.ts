@@ -1,8 +1,6 @@
-import { Readable, Writable } from 'node:stream';
-import fs, { write } from 'node:fs';
-
 import { XMLParser } from 'fast-xml-parser';
 import arg from 'arg';
+import fs from 'node:fs/promises';
 import winston from 'winston';
 
 const logger = winston.createLogger({
@@ -136,7 +134,7 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     /*const writeStream = Writable.toWeb(fs.createWriteStream("./output", {
         autoClose: false,
     }));*/
-    const file = fs.openSync(filename, "as");
+    const file = await fs.open(filename, "as");
     let chunkCnt = 0;
     try {
         for(const chunk of chunkedLastPaths) {
@@ -145,13 +143,13 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
                 return resp.arrayBuffer();
             }))
             for(const z of bodyStreams) {
-                fs.appendFileSync(file, Buffer.from(z));
+                await fs.appendFile(file, Buffer.from(z));
             }
             chunkCnt += chunk.length;
             logger.info("processed another " + chunk.length + " chunks. " + chunkCnt + "/" + lastPaths.length + " = " + (chunkCnt / lastPaths.length * 100).toFixed(2) + " %")
         }
     } finally {
-        fs.close(file);   
+        await file.close();
     }
 }
 
@@ -176,8 +174,10 @@ async function main() {
         if(!videoRepresentation || !audioRepresentation) {
             return;
         }
-        downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, "./output");
-        downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, "./output_audio");
+        await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, "./output"), 
+                           downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, "./output_audio")]);
+        // TODO merge files (audio and video into one mp4). with ffmpeg
+        // TODO delete the only audio and video file
     }
 }
 
