@@ -1,16 +1,23 @@
 import { XMLParser } from 'fast-xml-parser';
 import arg from 'arg';
 import fs from 'node:fs/promises';
+import { mapRawAdaptionSetToDs, partitionArray } from './utils';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import winston from 'winston';
 
 const logger = winston.createLogger({
     transports: [new winston.transports.Console()]
 })
 
+const MAX_PARALLEL_REQUESTS = 20;
+
 const args = arg({
     '-o': '--output',
     '-v': '--version',
     '-l': '--links',
+    '--chunkSize': Number,
     '--links': [String],
     '--verbose': Boolean,
 })
@@ -26,6 +33,7 @@ async function getManifestUrl(url: string): Promise<string | undefined> {
     let lastManiUrl = undefined;
     for(const [manifestUrl, _] of manifestUrls) {
         lastManiUrl = manifestUrl
+        if(lastManiUrl.includes("QXB.mp4")) break;
     }
     return lastManiUrl;
 }
@@ -52,66 +60,7 @@ async function fetchAndParseManifestFile(manifestUrl: string): Promise<{baseUrl:
     };
 }
 
-/**
- * some pretty good garbage code
- * @param adaptionSetRaw 
- * @returns 
- */
-function mapRawAdaptionSetToDs(adaptionSetRaw: any): AdaptionSet {
-    const segmentTemplate: SegmentTemplate = {
-        media: adaptionSetRaw["SegmentTemplate"]["@_media"],
-        initialization: adaptionSetRaw["SegmentTemplate"]["@_initialization"],
-        segmentTimeline: {
-            segments: (adaptionSetRaw["SegmentTemplate"]["SegmentTimeline"]["S"] as Array<any>).map((t) => {
-                return {
-                    d: t["@_d"],
-                    t: t["@_t"],
-                    r: t["@_r"],
-                }
-            })
-        }
-    }
-    let representations: Representation[] = [];
-    if(adaptionSetRaw["Representation"]?.length) {
-        representations = (adaptionSetRaw["Representation"] as Array<any>).map((t) => {
-            return {
-                id: t["@_id"] as string,
-                codecs: t["@_codecs"] as string,
-                ...(t["@_audioSamplingRate"] ? {audioSamplingRate: t["@_audioSamplingRate"] as string} : {}),
-                ...(t["@_width"] ? {width: t["@_width"] as string} : {}),
-                ...(t["@_height"] ? {height: t["@_height"] as string} : {}),
-            } as Representation;
-        })
-    } else {
-        representations = [{
-            id: adaptionSetRaw["Representation"]["@_id"],
-            codecs: adaptionSetRaw["Representation"]["@_codecs"] as string,
-            ...(adaptionSetRaw["Representation"]["@_audioSamplingRate"] ? {audioSamplingRate: adaptionSetRaw["Representation"]["@_audioSamplingRate"] as string} : {}),
-            ...(adaptionSetRaw["Representation"]["@_width"] ? {width: adaptionSetRaw["Representation"]["@_width"] as string} : {}),
-            ...(adaptionSetRaw["Representation"]["@_height"] ? {height: adaptionSetRaw["Representation"]["@_height"] as string} : {}),
-        } as Representation]
-    }
-    const adaptionSet: AdaptionSet = {
-        id: adaptionSetRaw["@_id"],
-        group: adaptionSetRaw["@_group"],
-        mimeType: adaptionSetRaw["@_mimeType"],
-        segmentTemplate,
-        representations,
-    }
-    return adaptionSet;
-}
-
-// TODO refactor
-function partitionArray<T>(arr: Array<T>, chunksize: number): Array<Array<T>> {
-    const res = [];
-    for (let i = 0; i < arr.length; i += chunksize) {
-        const chunk = arr.slice(i, i + chunksize);
-        res.push(chunk);
-    }
-    return res;
-}
-
-async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string) {
+async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string, chunkSize?: number) {
     let time = 0;
     const lastPaths = adaptionSet.segmentTemplate.segmentTimeline.segments.flatMap((s) => {
         let reps = 1;
@@ -127,8 +76,9 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     // also insert the init thingy
     lastPaths.unshift(adaptionSet.segmentTemplate.initialization.replace("$RepresentationID$", representationId));
     logger.info(`For the video there are ${lastPaths.length} segments to Download`)
-    // TODO make chunksize flexible (but be careful with to high chunksizes, we dont want to get blocked (if orf on even does it?))
-    const chunkSize = 10;
+    // TODO maybe even use available ram as a measure for how many requests parrallel are acceptable
+    const potentialChunkSize = Math.ceil(lastPaths.length / 10);
+    chunkSize = chunkSize ? chunkSize : (potentialChunkSize < (MAX_PARALLEL_REQUESTS + 1)) ? potentialChunkSize : MAX_PARALLEL_REQUESTS;
     const chunkedLastPaths = partitionArray(lastPaths, chunkSize);
     // TODO figure out how to make write stream to file work
     /*const writeStream = Writable.toWeb(fs.createWriteStream("./output", {
@@ -153,12 +103,28 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     }
 }
 
+async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string) {
+    return new Promise<void>((res, rej) => {
+        // TODO spawn subprocess
+        const ffmpeg = spawn(os.platform() === "linux" ? path.join(__dirname, "..", "ffmpeg-master-latest-linux64-gpl", "bin", "ffmpeg") : "Sorry :(", ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
+            windowsHide: true,
+            stdio: "inherit",
+        });
+
+        ffmpeg.on("exit", () => res());
+        
+        // get into stdout and print time estimation
+        // await end of subprocess
+    })
+}
+
 async function main() {
     if(!args['--links']) {
         logger.error("No links to download were given");
         return;
     }
     for(const link of args['--links']) {
+        const [audioPath, videoPath, finalFileName] = ["./output_audio", "./output", "final.mp4"];
         logger.info(`starting procedure for ${link}`)
         const manifestUrl = await getManifestUrl(link);
         if(!manifestUrl) {
@@ -170,14 +136,21 @@ async function main() {
         const videoRepresentation = (videoAdaptionSet.representations as VideoRepresentation[]).sort((a, b) => {
             return b.height - a.height;
         }).at(0);
-        const audioRepresentation = (audioAdaptionSet.representations as AudioRepresentation[]).at(0)
+        const audioRepresentation = (audioAdaptionSet.representations as AudioRepresentation[]).sort((a, b) => b.audioSamplingRate - a.audioSamplingRate).at(0)
         if(!videoRepresentation || !audioRepresentation) {
+            logger.error("");
             return;
         }
-        await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, "./output"), 
-                           downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, "./output_audio")]);
+        await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, videoPath, args['--chunkSize']), 
+                           downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, args['--chunkSize'])]);
         // TODO merge files (audio and video into one mp4). with ffmpeg
         // TODO delete the only audio and video file
+        logger.info(`Starting to merge ${videoPath} and ${audioPath} into ${finalFileName}`);
+        await mergeAudioAndVideo(audioPath, videoPath, finalFileName);
+        logger.info(`Done merging audio and video into ${finalFileName}`);
+        logger.info(`Deleting temp files (${videoPath}, ${audioPath} ...`);
+        await Promise.all([fs.rm(videoPath), fs.rm(audioPath)]);
+        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath}`)
     }
 }
 

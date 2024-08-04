@@ -3,7 +3,7 @@ type Representation = AudioRepresentation | VideoRepresentation;
 interface AudioRepresentation {
     id: string,
     codecs: string,
-    audioSamplingRate: string,
+    audioSamplingRate: number,
 }
 
 interface VideoRepresentation {
