@@ -23,18 +23,18 @@ export function mapRawAdaptionSetToDs(adaptionSetRaw: any): AdaptionSet {
             return {
                 id: t["@_id"] as string,
                 codecs: t["@_codecs"] as string,
-                ...(t["@_audioSamplingRate"] ? {audioSamplingRate: t["@_audioSamplingRate"] as string} : {}),
-                ...(t["@_width"] ? {width: t["@_width"] as string} : {}),
-                ...(t["@_height"] ? {height: t["@_height"] as string} : {}),
+                ...(t["@_audioSamplingRate"] ? {audioSamplingRate: t["@_audioSamplingRate"]} : {}),
+                ...(t["@_width"] ? {width: t["@_width"]} : {}),
+                ...(t["@_height"] ? {height: t["@_height"]} : {}),
             } as Representation;
         })
     } else {
         representations = [{
             id: adaptionSetRaw["Representation"]["@_id"],
             codecs: adaptionSetRaw["Representation"]["@_codecs"] as string,
-            ...(adaptionSetRaw["Representation"]["@_audioSamplingRate"] ? {audioSamplingRate: adaptionSetRaw["Representation"]["@_audioSamplingRate"] as string} : {}),
-            ...(adaptionSetRaw["Representation"]["@_width"] ? {width: adaptionSetRaw["Representation"]["@_width"] as string} : {}),
-            ...(adaptionSetRaw["Representation"]["@_height"] ? {height: adaptionSetRaw["Representation"]["@_height"] as string} : {}),
+            ...(adaptionSetRaw["Representation"]["@_audioSamplingRate"] ? {audioSamplingRate: adaptionSetRaw["Representation"]["@_audioSamplingRate"]} : {}),
+            ...(adaptionSetRaw["Representation"]["@_width"] ? {width: adaptionSetRaw["Representation"]["@_width"]} : {}),
+            ...(adaptionSetRaw["Representation"]["@_height"] ? {height: adaptionSetRaw["Representation"]["@_height"]} : {}),
         } as Representation]
     }
     const adaptionSet: AdaptionSet = {
