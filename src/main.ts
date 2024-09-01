@@ -8,13 +8,14 @@ import { spawn } from 'node:child_process';
 import winston from 'winston';
 
 const logger = winston.createLogger({
-    transports: [new winston.transports.Console()]
+    transports: [new winston.transports.Console()],
+    format: winston.format.cli(),
 })
 
 const MAX_PARALLEL_REQUESTS = 20;
 
 const args = arg({
-    '-o': '--output',
+    '-o': [String],
     '-v': '--version',
     '-l': '--links',
     '--chunkSize': Number,
@@ -60,7 +61,7 @@ async function fetchAndParseManifestFile(manifestUrl: string): Promise<{baseUrl:
     };
 }
 
-async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string, chunkSize?: number) {
+async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string, purpose: "audio" | "video", chunkSize?: number) {
     let time = 0;
     const lastPaths = adaptionSet.segmentTemplate.segmentTimeline.segments.flatMap((s) => {
         let reps = 1;
@@ -75,7 +76,7 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     });
     // also insert the init thingy
     lastPaths.unshift(adaptionSet.segmentTemplate.initialization.replace("$RepresentationID$", representationId));
-    logger.info(`For the video there are ${lastPaths.length} segments to Download`)
+    logger.info(`For the ${purpose} there are ${lastPaths.length} segments to Download`)
     // TODO maybe even use available ram as a measure for how many requests parrallel are acceptable
     const potentialChunkSize = Math.ceil(lastPaths.length / 10);
     chunkSize = chunkSize ? chunkSize : (potentialChunkSize < (MAX_PARALLEL_REQUESTS + 1)) ? potentialChunkSize : MAX_PARALLEL_REQUESTS;
@@ -96,20 +97,38 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
                 await fs.appendFile(file, Buffer.from(z));
             }
             chunkCnt += chunk.length;
-            logger.info("processed another " + chunk.length + " chunks. " + chunkCnt + "/" + lastPaths.length + " = " + (chunkCnt / lastPaths.length * 100).toFixed(2) + " %")
+            logger.info(purpose + " - processed another " + chunk.length + " chunks. " + chunkCnt + "/" + lastPaths.length + " = " + (chunkCnt / lastPaths.length * 100).toFixed(2) + " %")
         }
     } finally {
         await file.close();
     }
 }
 
+async function listDirectory(path: string): Promise<string[]> {
+    const dir = await fs.readdir(path);
+    const ans = [];
+    for(const file of dir) {
+        ans.push(path + file);
+        if((await fs.lstat(path + file)).isDirectory()) {
+            ans.push(...(await listDirectory(path + file)));
+        }
+    }
+    return ans;
+}
+
 async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string) {
     return new Promise<void>((res, rej) => {
         // TODO spawn subprocess
-        const ffmpeg = spawn(os.platform() === "linux" ? path.join(__dirname, "..", "ffmpeg-master-latest-linux64-gpl", "bin", "ffmpeg") : "Sorry :(", ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
+        //const ffmpeg = spawn(os.platform() === "win32" ? "Sorry :(" : path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl/bin/ffmpeg"), ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
+        const ffmpeg = spawn(path.join(process.cwd(), ".temp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg"), ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
             windowsHide: true,
-            stdio: "inherit",
+            //stdio: "inherit",
         });
+
+        ffmpeg.on("error", (err: Error) => {
+            //logger.error("Problem with subprocess: " + err.message)
+            rej(err);
+        })
 
         ffmpeg.on("exit", () => res());
         
@@ -119,13 +138,18 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
 }
 
 async function main() {
+    //console.log(await listDirectory(path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl/bin/")));
+    const tempFolder = path.join(process.cwd(), ".temp");
+    await fs.mkdir(tempFolder);
+    await fs.cp(path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl"), tempFolder, { recursive: true });
+    console.log(await listDirectory(tempFolder));
     if(!args['--links']) {
         logger.error("No links to download were given");
         return;
     }
-    for(const link of args['--links']) {
-        const [audioPath, videoPath, finalFileName] = ["./output_audio", "./output", "final.mp4"];
-        logger.info(`starting procedure for ${link}`)
+    for(const [i, link] of args['--links'].entries()) {
+        const [audioPath, videoPath, finalFileName] = ["./output_audio", "./output", args['-o'] ? (args['-o'][i] ?? `final${i}.mp4`) : `final${i}.mp4`];
+        logger.info(`starting procedure for ${link} and trying to save it to ${finalFileName}`)
         const manifestUrl = await getManifestUrl(link);
         if(!manifestUrl) {
             logger.error("There was a problem retrieving the url of the manifest file. Maybe the given url is isnt a on.orf.at/video url")
@@ -141,16 +165,18 @@ async function main() {
             logger.error("");
             return;
         }
-        await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, videoPath, args['--chunkSize']), 
-                           downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, args['--chunkSize'])]);
-        // TODO merge files (audio and video into one mp4). with ffmpeg
-        // TODO delete the only audio and video file
+        await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, videoPath, "video", args['--chunkSize']), 
+                           downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, "audio", args['--chunkSize'])]);
         logger.info(`Starting to merge ${videoPath} and ${audioPath} into ${finalFileName}`);
-        await mergeAudioAndVideo(audioPath, videoPath, finalFileName);
-        logger.info(`Done merging audio and video into ${finalFileName}`);
-        logger.info(`Deleting temp files (${videoPath}, ${audioPath} ...`);
+        try {
+            await mergeAudioAndVideo(audioPath, videoPath, finalFileName);
+            logger.info(`Done merging audio and video into ${finalFileName}`);
+        } catch(err) {
+            logger.error(err);
+        }
+        logger.info(`Deleting temp files (${videoPath}, ${audioPath}) ...`);
         await Promise.all([fs.rm(videoPath), fs.rm(audioPath)]);
-        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath}`)
+        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`)
     }
 }
 
