@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import winston from 'winston';
+import { version } from '../package.json';
 
 const logger = winston.createLogger({
     transports: [new winston.transports.Console()],
@@ -16,11 +17,13 @@ const MAX_PARALLEL_REQUESTS = 20;
 
 const args = arg({
     '-o': [String],
-    '-v': '--version',
-    '-l': '--links',
     '--chunkSize': Number,
     '--links': [String],
     '--verbose': Boolean,
+    '--help': Boolean,
+    '--version': Boolean,
+
+    '-v': '--version',
 })
 
 /**
@@ -104,23 +107,11 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     }
 }
 
-async function listDirectory(path: string): Promise<string[]> {
-    const dir = await fs.readdir(path);
-    const ans = [];
-    for(const file of dir) {
-        ans.push(path + file);
-        if((await fs.lstat(path + file)).isDirectory()) {
-            ans.push(...(await listDirectory(path + file)));
-        }
-    }
-    return ans;
-}
-
 async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string) {
     return new Promise<void>((res, rej) => {
         // TODO spawn subprocess
         //const ffmpeg = spawn(os.platform() === "win32" ? "Sorry :(" : path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl/bin/ffmpeg"), ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
-        const ffmpeg = spawn(path.join(process.cwd(), ".temp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg"), ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
+        const ffmpeg = spawn("ffmpeg", ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
             windowsHide: true,
             //stdio: "inherit",
         });
@@ -138,16 +129,15 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
 }
 
 async function main() {
-    //console.log(await listDirectory(path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl/bin/")));
-    const tempFolder = path.join(process.cwd(), ".temp");
-    await fs.mkdir(tempFolder);
-    await fs.cp(path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl"), tempFolder, { recursive: true });
-    console.log(await listDirectory(tempFolder));
-    if(!args['--links']) {
-        logger.error("No links to download were given");
+    if(args['-v']) {
+        logger.info(`You are usein ORF ON Downloader Version v${version}`)
         return;
     }
-    for(const [i, link] of args['--links'].entries()) {
+    if((!args._) || args['--help']) {
+        // TODO use command-line-usage package to generate synopsis
+        return;
+    }
+    for(const [i, link] of args._.entries()) {
         const [audioPath, videoPath, finalFileName] = ["./output_audio", "./output", args['-o'] ? (args['-o'][i] ?? `final${i}.mp4`) : `final${i}.mp4`];
         logger.info(`starting procedure for ${link} and trying to save it to ${finalFileName}`)
         const manifestUrl = await getManifestUrl(link);

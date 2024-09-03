@@ -1,6 +1,9 @@
 name: CI
 
-on: [push]
+on:
+  push:
+    tags:
+      - v*
 
 jobs:
   build:
@@ -12,7 +15,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 18.13
+          cache: 'npm'
+      - name: Print commit sha
+        run: echo "$GITHUB_SHA"    
       - name: Installing Dependencies
         run: npm ci
       - name: Building
         run: npm run build --if-present
+      - name: Package App
+        run: npm run package
