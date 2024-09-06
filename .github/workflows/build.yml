@@ -14,8 +14,12 @@ jobs:
         with:
           node-version: 18.13
           cache: 'npm'
-      - name: Print commit sha
-        run: echo "$GITHUB_SHA"    
+      - name: Print package.json pre Manipulation
+        run: cat package.json
+      - name: Write commit SHA to package.jsons version field
+        run: node -e "const fs = require('node:fs'); const raw = fs.readFileSync(\"./package.json\"); const parsed = JSON.parse(raw); parsed[\"version\"] = parsed[\"version\"] + \" - $GITHUB_SHA\"; fs.writeFileSync(\"./package.json\", JSON.stringify(parsed, null, 2));"
+      - name: Print package.json post Manipulation
+        run: cat package.json
       - name: Installing Dependencies
         run: npm ci
       - name: Building

@@ -130,7 +130,7 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
 
 async function main() {
     if(args['-v']) {
-        logger.info(`You are usein ORF ON Downloader Version v${version}`)
+        logger.info(`You are useing ORF ON Downloader Version v${version}`)
         return;
     }
     if((!args._) || args['--help']) {
