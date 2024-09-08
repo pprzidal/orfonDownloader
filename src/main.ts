@@ -93,8 +93,18 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     try {
         for(const chunk of chunkedLastPaths) {
             const bodyStreams = await Promise.all(chunk.map(async c => {
-                const resp = await fetch(baseUrl + c);
-                return resp.arrayBuffer();
+                let attempts = 3;
+                while(attempts > 0) {
+                    try {
+                        const resp = await fetch(baseUrl + c);
+                        return resp.arrayBuffer();
+                    } catch(ex) {
+                        attempts--;
+                        logger.debug(`${purpose},${baseUrl + c}: ${ex}`);
+                        logger.error(`${purpose} - failed to fetch for ${baseUrl + c}. ${attempts} attempts left.`)
+                    }
+                }
+                return Promise.reject(`${purpose} - failed to fetch for ${baseUrl + c}`);
             }))
             for(const z of bodyStreams) {
                 await fs.appendFile(file, Buffer.from(z));
@@ -107,10 +117,39 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     }
 }
 
+/**
+ * Downloads ffmpeg and writes it to a directory for the current user
+ * @param folderPath 
+ * @returns the path to the freshly installed ffmpeg binary
+ */
+async function installFFMPEG(folderPath: string): Promise<string> {
+    const downloadLinks = {
+        "linux": "https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz",
+        "win32": "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-essentials_build.zip",
+        "darwin": "https://evermeet.cx/pub/ffmpeg/ffmpeg-6.0.zip",
+    };
+
+    if(!["linux", "win32", "darwin"].includes(os.platform())) throw `ORF ON Downloader doesnt support ${os.platform()}`;
+
+    const orfOnDownloaderPath = path.join(os.homedir(), ".orfOnDownloader");
+    await fs.mkdir(orfOnDownloaderPath, { recursive: true });
+
+    const resp = await fetch(downloadLinks[os.platform() as "linux" | "win32" | "darwin"])
+    const ffmpegZip = path.join(orfOnDownloaderPath, "ffmpegDownload");
+    fs.writeFile(ffmpegZip, Buffer.from(await resp.arrayBuffer()));
+
+    // TODO unzip
+    const unpackCommands = {
+        "linux": "https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz",
+        "win32": "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-essentials_build.zip",
+        "darwin": ["unzip", ffmpegZip, "-d", "ffmpeg"],
+    }
+
+    return "";
+}
+
 async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string) {
     return new Promise<void>((res, rej) => {
-        // TODO spawn subprocess
-        //const ffmpeg = spawn(os.platform() === "win32" ? "Sorry :(" : path.join(__dirname, "../ffmpeg-master-latest-linux64-gpl/bin/ffmpeg"), ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
         const ffmpeg = spawn("ffmpeg", ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
             windowsHide: true,
             //stdio: "inherit",
@@ -142,19 +181,14 @@ async function main() {
         logger.info(`starting procedure for ${link} and trying to save it to ${finalFileName}`)
         const manifestUrl = await getManifestUrl(link);
         if(!manifestUrl) {
-            logger.error("There was a problem retrieving the url of the manifest file. Maybe the given url is isnt a on.orf.at/video url")
-            logger.error("Exiting")
-            return;   
+            logger.error(`There was a problem retrieving the url of the manifest file for ${link}. Maybe the given url is isnt a on.orf.at/video url`)
+            continue;
         }
         const { baseUrl, audioAdaptionSet, videoAdaptionSet } = await fetchAndParseManifestFile(manifestUrl);
         const videoRepresentation = (videoAdaptionSet.representations as VideoRepresentation[]).sort((a, b) => {
             return b.height - a.height;
-        }).at(0);
-        const audioRepresentation = (audioAdaptionSet.representations as AudioRepresentation[]).sort((a, b) => b.audioSamplingRate - a.audioSamplingRate).at(0)
-        if(!videoRepresentation || !audioRepresentation) {
-            logger.error("");
-            return;
-        }
+        }).at(0)!;
+        const audioRepresentation = (audioAdaptionSet.representations as AudioRepresentation[]).sort((a, b) => b.audioSamplingRate - a.audioSamplingRate).at(0)!;
         await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, videoPath, "video", args['--chunkSize']), 
                            downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, "audio", args['--chunkSize'])]);
         logger.info(`Starting to merge ${videoPath} and ${audioPath} into ${finalFileName}`);
