@@ -19,7 +19,7 @@ jobs:
           node -e "const fs = require('node:fs'); \
             const raw = fs.readFileSync(\"./package.json\"); \
             const parsed = JSON.parse(raw); \
-            parsed[\"version\"] = parsed[\"version\"] + \" - $GARBAGE\"; \
+            parsed[\"version\"] = parsed[\"version\"] + \" - $GITHUB_SHA\"; \
             fs.writeFileSync(\"./package.json\", JSON.stringify(parsed, null, 2));"
       - name: Installing Dependencies
         run: npm ci
