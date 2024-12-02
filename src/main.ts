@@ -7,6 +7,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import winston from 'winston';
 import { version } from '../package.json';
+import commandLineUsage from 'command-line-usage';
+import { sections } from './cli';
 
 const logger = winston.createLogger({
     transports: [new winston.transports.Console()],
@@ -64,48 +66,54 @@ async function fetchAndParseManifestFile(manifestUrl: string): Promise<{baseUrl:
     };
 }
 
-async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string, purpose: "audio" | "video", chunkSize?: number) {
+function prepareSegments(segmentTemplate: SegmentTemplate, representationId: string): string[] {
     let time = 0;
-    const lastPaths = adaptionSet.segmentTemplate.segmentTimeline.segments.flatMap((s) => {
+    const lastPaths = segmentTemplate.segmentTimeline.segments.flatMap((s) => {
         let reps = 1;
         if(s.r) reps += s.r;
         const agg = [];
         for(let i = 0; i < reps; i++) {
-            const lastPath = (adaptionSet.segmentTemplate.media.replace("$RepresentationID$", representationId).replace("$Time$", `${time}`));
+            const lastPath = (segmentTemplate.media.replace("$RepresentationID$", representationId).replace("$Time$", `${time}`));
             agg.push(lastPath);
             time += s.d;
         }
         return agg;
     });
     // also insert the init thingy
-    lastPaths.unshift(adaptionSet.segmentTemplate.initialization.replace("$RepresentationID$", representationId));
+    lastPaths.unshift(segmentTemplate.initialization.replace("$RepresentationID$", representationId));
+    return lastPaths;
+}
+
+async function downloadChunk(chunk: string[], baseUrl: string, purpose: "audio" | "video", attempts = 3) {
+    return Promise.all(chunk.map(async c => {
+        let attemptsLeft = attempts;
+        while(attempts > 0) {
+            try {
+                const resp = await fetch(baseUrl + c);
+                return resp.arrayBuffer();
+            } catch(ex) {
+                attempts--;
+                logger.debug(`${purpose},${baseUrl + c}: ${ex}`);
+                logger.error(`${purpose} - failed to fetch for ${baseUrl + c}. ${attemptsLeft} attempts left.`)
+            }
+        }
+        return Promise.reject(`${purpose} - failed to fetch for ${baseUrl + c}`);
+    }));
+}
+
+async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, representationId: string, baseUrl: string, filename: string, purpose: "audio" | "video", chunkSize?: number) {
+    const lastPaths = prepareSegments(adaptionSet.segmentTemplate, representationId);
     logger.info(`For the ${purpose} there are ${lastPaths.length} segments to Download`)
-    // TODO maybe even use available ram as a measure for how many requests parrallel are acceptable
+    // TODO maybe even use available RAM as a measure for how many requests parrallel are acceptable
     const potentialChunkSize = Math.ceil(lastPaths.length / 10);
     chunkSize = chunkSize ? chunkSize : (potentialChunkSize < (MAX_PARALLEL_REQUESTS + 1)) ? potentialChunkSize : MAX_PARALLEL_REQUESTS;
     const chunkedLastPaths = partitionArray(lastPaths, chunkSize);
     // TODO figure out how to make write stream to file work
-    /*const writeStream = Writable.toWeb(fs.createWriteStream("./output", {
-        autoClose: false,
-    }));*/
     const file = await fs.open(filename, "as");
     let chunkCnt = 0;
     try {
         for(const chunk of chunkedLastPaths) {
-            const bodyStreams = await Promise.all(chunk.map(async c => {
-                let attempts = 3;
-                while(attempts > 0) {
-                    try {
-                        const resp = await fetch(baseUrl + c);
-                        return resp.arrayBuffer();
-                    } catch(ex) {
-                        attempts--;
-                        logger.debug(`${purpose},${baseUrl + c}: ${ex}`);
-                        logger.error(`${purpose} - failed to fetch for ${baseUrl + c}. ${attempts} attempts left.`)
-                    }
-                }
-                return Promise.reject(`${purpose} - failed to fetch for ${baseUrl + c}`);
-            }))
+            const bodyStreams = await downloadChunk(chunk, baseUrl, purpose);
             for(const z of bodyStreams) {
                 await fs.appendFile(file, Buffer.from(z));
             }
@@ -118,7 +126,7 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
 }
 
 /**
- * Downloads ffmpeg and writes it to a directory for the current user
+ * CURRENTLY NOT USED. Downloads ffmpeg and writes it to a directory for the current user.
  * @param folderPath 
  * @returns the path to the freshly installed ffmpeg binary
  */
@@ -152,7 +160,6 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
     return new Promise<void>((res, rej) => {
         const ffmpeg = spawn("ffmpeg", ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
             windowsHide: true,
-            //stdio: "inherit",
         });
 
         ffmpeg.on("error", (err: Error) => {
@@ -161,9 +168,6 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
         })
 
         ffmpeg.on("exit", () => res());
-        
-        // get into stdout and print time estimation
-        // await end of subprocess
     })
 }
 
@@ -173,12 +177,12 @@ async function main() {
         return;
     }
     if((!args._) || args['--help']) {
-        // TODO use command-line-usage package to generate synopsis
+        console.log(commandLineUsage(sections));
         return;
     }
     for(const [i, link] of args._.entries()) {
         const [audioPath, videoPath, finalFileName] = ["./output_audio", "./output", args['-o'] ? (args['-o'][i] ?? `final${i}.mp4`) : `final${i}.mp4`];
-        logger.info(`starting procedure for ${link} and trying to save it to ${finalFileName}`)
+        logger.info(`Starting procedure ${i + 1} of ${args._.length} for ${link} and trying to save it to ${finalFileName}`)
         const manifestUrl = await getManifestUrl(link);
         if(!manifestUrl) {
             logger.error(`There was a problem retrieving the url of the manifest file for ${link}. Maybe the given url is isnt a on.orf.at/video url`)
@@ -200,7 +204,8 @@ async function main() {
         }
         logger.info(`Deleting temp files (${videoPath}, ${audioPath}) ...`);
         await Promise.all([fs.rm(videoPath), fs.rm(audioPath)]);
-        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`)
+        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`);
+        console.log(`${os.EOL}${os.EOL}`);
     }
 }
 
