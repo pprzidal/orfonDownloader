@@ -56,3 +56,20 @@ export function partitionArray<T>(arr: Array<T>, chunksize: number): Array<Array
     }
     return res;
 }
+
+function generateArray(amount: number, fromIdxToFilename: (idx: number) => string, offset?: number): string[] {
+    return Array(amount).map((_, idx) => fromIdxToFilename(idx + (offset ?? 0)));
+}
+
+export function getFinalFilenames(amount: number, names?: string[], fileNameFromIdx = (idx: number) => `final${idx}.mp4`): string[] {
+    if(names) {
+        let arr = names;
+        if(names.length == 1 && names[0].includes(',')) {
+            arr = names[0].split(',');
+            //return arr.length == amount ? arr : [...arr, ...generateArray(amount - arr.length, fileNameFromIdx, (amount - arr.length) + 1)];
+        }
+        return [...arr, ...generateArray(amount - arr.length, fileNameFromIdx, (amount - arr.length) + 1)]
+
+    }
+    return generateArray(amount, fileNameFromIdx);
+}

@@ -1,24 +1,30 @@
 const optionDefinitions = [
   {
     name: 'help',
-    description: 'Display this usage guide.',
-    alias: 'h',
+    description: 'This option can be used to display the help (your currently viewing)',
     type: Boolean
   },
   {
-    name: 'src',
-    description: 'The input files to process. This is some additional text existing solely to demonstrate word-wrapping, nothing more, nothing less. And nothing in between.',
-    type: String,
-    multiple: true,
-    defaultOption: true,
-    typeLabel: '{underline file} ...'
+    name: 'chunkSize',
+    description: 'The amount of HTTP Request to send in parrallel',
+    type: Number,
   },
   {
-    name: 'timeout',
-    description: 'Timeout value in ms.',
-    alias: 't',
+    name: 'retries',
+    description: 'The amount of retries for each HTTP Request. So each HTTP Request will be executed retries + 1 times at most',
     type: Number,
-    typeLabel: '{underline ms}'
+  },
+  {
+    name: 'output',
+    description: 'The name of the files in which to write the videos',
+    alias: 'o',
+    type: String,
+  },
+  {
+    name: 'version',
+    description: 'This Option can be used to display the version of ORF ON Downloader you use',
+    alias: 'v',
+    type: Boolean,
   }
 ]
 
@@ -30,8 +36,7 @@ const sections = [
   {
     header: 'Synopsis',
     content: [
-      '$ orfonDownloader [{bold options...] link1 link2 ...',
-      '$ orfonDownloader -o ottoWalkesZIB.mp4 -o budSpencerZIB.mp4 https://on.orf.at/video/7982416/otto-waalkes-in-wien https://on.orf.at/video/13113850/bud-spencer-und-terence-hill-ueber-ihre-karrieren'
+      '$ orfonDownloader [{bold options...}] link1 link2 ...',
     ]
   },
   {
@@ -42,16 +47,12 @@ const sections = [
     header: 'Examples',
     content: [
       {
-        desc: '1. A concise example. ',
-        example: '$ example -t 100 lib/*.js'
+        desc: '1. Downloading two videos and saving them in the associated files. ',
+        example: '$ orfonDownloader -o ottoWalkesZIB.mp4 -o budSpencerZIB.mp4 https://on.orf.at/video/7982416/otto-waalkes-in-wien https://on.orf.at/video/13113850/bud-spencer-und-terence-hill-ueber-ihre-karrieren'
       },
       {
-        desc: '2. A long example. ',
-        example: '$ example --timeout 100 --src lib/*.js'
-      },
-      {
-        desc: '3. This example will scan space for unknown things. Take cure when scanning space, it could take some time. ',
-        example: '$ example --src galaxy1.facts galaxy1.facts galaxy2.facts galaxy3.facts galaxy4.facts galaxy5.facts'
+        desc: '2. Downloading a long video. Setting the chunkSize manually to speed things up. ',
+        example: '$ orfonDownloader --chunkSize 20 -o meinRudolfsheim.mp4 https://on.orf.at/video/14024452/mein-rudolfsheim-fuenfhaus'
       }
     ]
   },
