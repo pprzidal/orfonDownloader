@@ -34,4 +34,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            orfondownloader
+            ./bin/orfondownloader
