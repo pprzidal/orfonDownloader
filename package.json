@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
-    "package": "pkg --compress Brotli --options no-warnings -d -c ./package.json ./dist/src/main.js"
+    "package": "pkg --compress GZip --options no-warnings -d -c ./package.json ./dist/src/main.js"
   },
   "keywords": [],
   "author": "pprzidal",
@@ -29,7 +29,9 @@
   },
   "pkg": {
     "targets": [
-      "node18-linux-x64"
+      "node18-linux-x64",
+      "node18-win-x64",
+      "node18-macos-x64"
     ],
     "outputPath": "bin"
   }
