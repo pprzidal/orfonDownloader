@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
-    "package": "pkg -d -c ./package.json ./dist/src/main.js"
+    "package": "pkg --compress Brotli --options no-warnings -d -c ./package.json ./dist/src/main.js"
   },
   "keywords": [],
   "author": "pprzidal",
