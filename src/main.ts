@@ -17,17 +17,6 @@ const logger = winston.createLogger({
 
 const MAX_PARALLEL_REQUESTS = 20;
 
-const args = arg({
-    '-o': [String],
-    '--chunkSize': Number,
-    '--retries': Number,
-    '--verbose': Boolean,
-    '--help': Boolean,
-    '--version': Boolean,
-
-    '-v': '--version',
-})
-
 /**
  * Returns the last url which ends with manifest.mpd mentioned in the fetched url document
  * @param url 
@@ -156,9 +145,11 @@ async function installFFMPEG(folderPath: string): Promise<string> {
     return "";
 }
 
-async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string) {
+async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string, ffmpegPath?: string) {
+    const ffmpegExecutable = ffmpegPath ?? "ffmpeg";
+    logger.info(`Useing ${ffmpegExecutable} as ffmpeg`);
     return new Promise<void>((res, rej) => {
-        const ffmpeg = spawn("ffmpeg", ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
+        const ffmpeg = spawn(ffmpegExecutable, ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
             windowsHide: true,
         });
 
@@ -171,14 +162,28 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
 }
 
 async function main() {
+    const args = arg({
+        '-o': [String],
+        '--chunkSize': Number,
+        '--retries': Number,
+        '--ffmpegPath': String,
+        '--verbose': Boolean,
+        '--help': Boolean,
+        '--version': Boolean,
+    
+        '-v': '--version',
+    })
+
     if(args['--version']) {
         console.log(`You are useing ORF ON Downloader Version v${version}`)
         return;
     }
+
     if((!args._) || args['--help'] || args._.length == 0) {
         console.log(commandLineUsage(sections));
         return;
     }
+
     const fileNames = getFinalFilenames(args._.length, args['-o']);
     for(const [i, link] of args._.entries()) {
         const [audioPath, videoPath, finalFileName] = ["./output_audio", "./output", fileNames[i]];
@@ -197,7 +202,7 @@ async function main() {
                            downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, "audio", args['--chunkSize'], args['--retries'])]);
         logger.info(`Starting to merge ${videoPath} and ${audioPath} into ${finalFileName}`);
         try {
-            await mergeAudioAndVideo(audioPath, videoPath, finalFileName);
+            await mergeAudioAndVideo(audioPath, videoPath, finalFileName, args['--ffmpegPath']);
             logger.info(`Done merging audio and video into ${finalFileName}`);
         } catch(err) {
             logger.error(err);

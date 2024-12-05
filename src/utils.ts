@@ -58,7 +58,7 @@ export function partitionArray<T>(arr: Array<T>, chunksize: number): Array<Array
 }
 
 function generateArray(amount: number, fromIdxToFilename: (idx: number) => string, offset?: number): string[] {
-    return Array(amount).map((_, idx) => fromIdxToFilename(idx + (offset ?? 0)));
+    return Array(amount).fill(0).map((_, idx) => fromIdxToFilename(idx + (offset ?? 0)));
 }
 
 export function getFinalFilenames(amount: number, names?: string[], fileNameFromIdx = (idx: number) => `final${idx}.mp4`): string[] {
@@ -66,7 +66,6 @@ export function getFinalFilenames(amount: number, names?: string[], fileNameFrom
         let arr = names;
         if(names.length == 1 && names[0].includes(',')) {
             arr = names[0].split(',');
-            //return arr.length == amount ? arr : [...arr, ...generateArray(amount - arr.length, fileNameFromIdx, (amount - arr.length) + 1)];
         }
         return [...arr, ...generateArray(amount - arr.length, fileNameFromIdx, (amount - arr.length) + 1)]
 

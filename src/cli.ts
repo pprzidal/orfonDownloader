@@ -25,6 +25,11 @@ const optionDefinitions = [
     description: 'This Option can be used to display the version of ORF ON Downloader you use',
     alias: 'v',
     type: Boolean,
+  },
+  {
+    name: 'ffmpegPath',
+    description: 'This Option can be used when the folder containing ffmpeg isnt in the PATH Variable. You can hint ORF ON Downloader to the ffmpeg binary. For example \'... --ffmpegPath /usr/bin/ffmpeg ...\'',
+    type: String,
   }
 ]
 
