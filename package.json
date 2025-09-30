@@ -25,13 +25,13 @@
     "winston": "^3.13.1"
   },
   "engines": {
-    "node": "18.*"
+    "node": "22.*"
   },
   "pkg": {
     "targets": [
-      "node18-linux-x64",
-      "node18-win-x64",
-      "node18-macos-x64"
+      "node22-linux-x64",
+      "node22-win-x64",
+      "node22-macos-x64"
     ],
     "outputPath": "bin"
   }

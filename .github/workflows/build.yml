@@ -12,10 +12,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js 18.13
+      - name: Use Node.js 22.20
         uses: actions/setup-node@v4
         with:
-          node-version: 18.13
+          node-version: 22.20
           cache: 'npm'
       - name: Write commit SHA to package.jsons version field
         run: |

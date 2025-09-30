@@ -58,7 +58,9 @@ export function partitionArray<T>(arr: Array<T>, chunksize: number): Array<Array
 }
 
 function generateArray(amount: number, fromIdxToFilename: (idx: number) => string, offset?: number): string[] {
-    return Array(amount).fill(0).map((_, idx) => fromIdxToFilename(idx + (offset ?? 0)));
+    const arr = new Array<string>(amount);
+    for(let i = 0; i < arr.length; i++) arr[i] = fromIdxToFilename(i + (offset ?? 0));
+    return arr;
 }
 
 export function getFinalFilenames(amount: number, names?: string[], fileNameFromIdx = (idx: number) => `final${idx}.mp4`): string[] {

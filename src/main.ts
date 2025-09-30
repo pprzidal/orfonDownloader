@@ -149,8 +149,9 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
     const ffmpegExecutable = ffmpegPath ?? "ffmpeg";
     logger.info(`Useing ${ffmpegExecutable} as ffmpeg`);
     return new Promise<void>((res, rej) => {
-        const ffmpeg = spawn(ffmpegExecutable, ["-stats", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
+        const ffmpeg = spawn(ffmpegExecutable, ["-stats", "-loglevel", "error", "-i", videoPath, "-i", audioPath, "-c", "copy", outfile], {
             windowsHide: true,
+            stdio: 'inherit',
         });
 
         ffmpeg.on("error", (err: Error) => {
@@ -207,9 +208,9 @@ async function main() {
         } catch(err) {
             logger.error(err);
         }
-        logger.info(`Deleting temp files (${videoPath}, ${audioPath}) ...`);
+        /*logger.info(`Deleting temp files (${videoPath}, ${audioPath}) ...`);
         await Promise.all([fs.rm(videoPath), fs.rm(audioPath)]);
-        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`);
+        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`);*/
         console.log(`${os.EOL}${os.EOL}`);
     }
 }
