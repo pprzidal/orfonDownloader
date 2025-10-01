@@ -30,7 +30,12 @@ const optionDefinitions = [
     name: 'ffmpegPath',
     description: 'This Option can be used when the folder containing ffmpeg isnt in the PATH Variable. You can hint ORF ON Downloader to the ffmpeg binary. For example \'... --ffmpegPath /usr/bin/ffmpeg ...\'',
     type: String,
-  }
+  },
+  {
+    name: 'useFFMPEGPipes',
+    description: 'Only available on Linux! This Option can be used to spawn ffmpeg with two pipes as input (one for audio and one for video). With this the intermediate files dont have to be persistent to the Filesystem and usually time is saved',
+    type: Boolean,
+  },
 ]
 
 const sections = [
