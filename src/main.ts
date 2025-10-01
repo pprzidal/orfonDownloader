@@ -9,6 +9,7 @@ import winston from 'winston';
 import { version } from '../package.json';
 import commandLineUsage from 'command-line-usage';
 import { sections } from './cli';
+import { PassThrough, Readable, Writable } from 'node:stream';
 
 const logger = winston.createLogger({
     transports: [new winston.transports.Console()],
@@ -114,35 +115,83 @@ async function downloadSegmentsAndSaveToFile(adaptionSet: AdaptionSet, represent
     }
 }
 
-/**
- * CURRENTLY NOT USED. Downloads ffmpeg and writes it to a directory for the current user.
- * @param folderPath 
- * @returns the path to the freshly installed ffmpeg binary
- */
-async function installFFMPEG(folderPath: string): Promise<string> {
-    const downloadLinks = {
-        "linux": "https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz",
-        "win32": "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-essentials_build.zip",
-        "darwin": "https://evermeet.cx/pub/ffmpeg/ffmpeg-6.0.zip",
-    };
+function partition(adaptionSet: AdaptionSet, representationId: string) {
+    const lastPaths = prepareSegments(adaptionSet.segmentTemplate, representationId);
+    // TODO maybe even use available RAM as a measure for how many requests parrallel are acceptable
+    const potentialChunkSize = Math.ceil(lastPaths.length / 10);
+    const chunkSize = (potentialChunkSize < (MAX_PARALLEL_REQUESTS + 1)) ? potentialChunkSize : MAX_PARALLEL_REQUESTS;
+    const chunkedLastPaths = partitionArray(lastPaths, chunkSize);
+    return chunkedLastPaths;
+}
 
-    if(!["linux", "win32", "darwin"].includes(os.platform())) throw `ORF ON Downloader doesnt support ${os.platform()}`;
-
-    const orfOnDownloaderPath = path.join(os.homedir(), ".orfOnDownloader");
-    await fs.mkdir(orfOnDownloaderPath, { recursive: true });
-
-    const resp = await fetch(downloadLinks[os.platform() as "linux" | "win32" | "darwin"])
-    const ffmpegZip = path.join(orfOnDownloaderPath, "ffmpegDownload");
-    fs.writeFile(ffmpegZip, Buffer.from(await resp.arrayBuffer()));
-
-    // TODO unzip
-    const unpackCommands = {
-        "linux": "https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz",
-        "win32": "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-essentials_build.zip",
-        "darwin": ["unzip", ffmpegZip, "-d", "ffmpeg"],
+function mixPartitions(source1: string[][], source1Purpose: "audio" | "video", source2: string[][], source2Purpose: "audio" | "video"): Array<{ lastPaths: string[], purpose: "audio" | "video" }> {
+    const newArray = new Array(source1.length + source2.length);
+    for(let i = 0, source1Cnt = 0, source2Cnt = 0; i < newArray.length; i++) {
+        const even = ((i % 2) == 0);
+        if((even && source1Cnt < source1.length) || (source2Cnt >= source2.length)) {
+            newArray[i] = { lastPaths: source1[source1Cnt], purpose: source1Purpose }
+            source1Cnt++;
+        } else {
+            newArray[i] = { lastPaths: source2[source2Cnt], purpose: source2Purpose }
+            source2Cnt++;
+        }
     }
+    return newArray;
+}
 
-    return "";
+async function downloadSegmentsAndPutToStream(chunks: Array<{lastPaths: Array<string>, purpose: "audio" | "video"}>, baseUrl: string, audioStream: PassThrough, videoStream: PassThrough, retries?: number) {
+    const chunkSizes = {
+        "video": chunks.reduce((prev, cur) => (cur.purpose === "video") ? cur.lastPaths.length + prev : prev, 0),
+        "audio": chunks.reduce((prev, cur) => (cur.purpose === "audio") ? cur.lastPaths.length + prev : prev, 0),
+    }
+    const chunkCnt = {
+        "audio": 0,
+        "video": 0,
+    };
+    try {
+        for(const chunk of chunks) {
+            const bodyStreams = await downloadChunk(chunk.lastPaths, baseUrl, chunk.purpose, retries ? retries + 1 : 3);
+            for(const z of bodyStreams) {
+                //await fs.appendFile(file, Buffer.from(z));
+                if(chunk.purpose === "audio") audioStream.write(Buffer.from(z));
+                else if(chunk.purpose === "video") videoStream.write(Buffer.from(z));
+            }
+            chunkCnt[chunk.purpose] += chunk.lastPaths.length;
+            logger.info(chunk.purpose + " - processed another " + chunk.lastPaths.length + " chunks. " + chunkCnt[chunk.purpose] + "/" + chunkSizes[chunk.purpose] + " = " + (chunkCnt[chunk.purpose] / chunkSizes[chunk.purpose] * 100).toFixed(2) + " %")
+        }
+    } finally {
+        audioStream.end();
+        videoStream.end();
+    }
+}
+
+async function mergeAudioAndVideoStream(outfile: string, ffmpegPath?: string): Promise<{audioStream: PassThrough, videoStream: PassThrough}> {
+    const ffmpegExecutable = ffmpegPath ?? "ffmpeg";
+    logger.info(`Useing ${ffmpegExecutable} as ffmpeg`);
+    const audioStream = new PassThrough();
+    const videoStream = new PassThrough();
+    return new Promise((res, rej) => {
+        const ffmpeg = spawn(ffmpegExecutable, ["-stats", "-loglevel", "error", "-i", "pipe:3", "-i", "pipe:4", "-c", "copy", outfile], {
+            windowsHide: true,
+            stdio: ['inherit', 'inherit', 'inherit', 'pipe', 'pipe'],
+            timeout: 120_000,
+        });
+
+        audioStream.pipe(ffmpeg.stdio[3] as Writable);
+        videoStream.pipe(ffmpeg.stdio[4] as Writable);
+
+        ffmpeg.on("error", (err: Error) => {
+            rej(err);
+        })
+
+        ffmpeg.on("exit", () => {
+            audioStream.unpipe();
+            videoStream.unpipe();
+            logger.info("ffmpeg Merging done");
+        });
+
+        ffmpeg.on("spawn", () => res({audioStream, videoStream}));
+    })
 }
 
 async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile: string, ffmpegPath?: string) {
@@ -162,6 +211,27 @@ async function mergeAudioAndVideo(audioPath: string, videoPath: string, outfile:
     })
 }
 
+async function persistAndMergeSequentially(videoAdaptionSet: AdaptionSet, audioAdaptionSet: AdaptionSet, videoRepresentation: VideoRepresentation, audioRepresentation: AudioRepresentation, 
+                                            baseUrl: string, videoPath: string, audioPath: string, finalFileName: string, args: arg.Result<any>) {
+    await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, videoPath, "video", args['--chunkSize'], args['--retries']), 
+                        downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, "audio", args['--chunkSize'], args['--retries'])]);
+    logger.info(`Starting to merge ${videoPath} and ${audioPath} into ${finalFileName}`);
+    try {
+        await mergeAudioAndVideo(audioPath, videoPath, finalFileName, args['--ffmpegPath']);
+        logger.info(`Done merging audio and video into ${finalFileName}`);
+    } catch(err) {
+        logger.error(err);
+    }
+}
+
+async function pipeIntoFFMPEG(videoAdaptionSet: AdaptionSet, audioAdaptionSet: AdaptionSet, videoRepresentation: VideoRepresentation, audioRepresentation: AudioRepresentation, 
+                                baseUrl: string, finalFileName: string, args: arg.Result<any>) {
+    const [lastPathsVideo, lastPathsAudio] = [partition(videoAdaptionSet, videoRepresentation.id), partition(audioAdaptionSet, audioRepresentation.id)];
+    const mixedParts = mixPartitions(lastPathsVideo, "video", lastPathsAudio, "audio");
+    const { audioStream, videoStream } = await mergeAudioAndVideoStream(finalFileName, args['--ffmpegPath']);
+    await downloadSegmentsAndPutToStream(mixedParts, baseUrl, audioStream, videoStream);
+}
+
 async function main() {
     const args = arg({
         '-o': [String],
@@ -171,6 +241,7 @@ async function main() {
         '--verbose': Boolean,
         '--help': Boolean,
         '--version': Boolean,
+        '--useFFMPEGPipes': Boolean,
     
         '-v': '--version',
     })
@@ -199,19 +270,18 @@ async function main() {
             return b.height - a.height;
         }).at(0)!;
         const audioRepresentation = (audioAdaptionSet.representations as AudioRepresentation[]).sort((a, b) => b.audioSamplingRate - a.audioSamplingRate).at(0)!;
-        await Promise.all([downloadSegmentsAndSaveToFile(videoAdaptionSet, videoRepresentation.id, baseUrl, videoPath, "video", args['--chunkSize'], args['--retries']), 
-                           downloadSegmentsAndSaveToFile(audioAdaptionSet, audioRepresentation.id, baseUrl, audioPath, "audio", args['--chunkSize'], args['--retries'])]);
-        logger.info(`Starting to merge ${videoPath} and ${audioPath} into ${finalFileName}`);
-        try {
-            await mergeAudioAndVideo(audioPath, videoPath, finalFileName, args['--ffmpegPath']);
-            logger.info(`Done merging audio and video into ${finalFileName}`);
-        } catch(err) {
-            logger.error(err);
+
+        if(args['--useFFMPEGPipes']) {
+            await pipeIntoFFMPEG(videoAdaptionSet, audioAdaptionSet, videoRepresentation, audioRepresentation, baseUrl, finalFileName, args);
+        } else {
+            await persistAndMergeSequentially(videoAdaptionSet, audioAdaptionSet, videoRepresentation, audioRepresentation, baseUrl, videoPath, audioPath, finalFileName, args);
+            
+            // cleanup temporary files
+            logger.info(`Deleting temp files (${videoPath}, ${audioPath}) ...`);
+            await Promise.all([fs.rm(videoPath), fs.rm(audioPath)]);
+            logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`);
         }
-        /*logger.info(`Deleting temp files (${videoPath}, ${audioPath}) ...`);
-        await Promise.all([fs.rm(videoPath), fs.rm(audioPath)]);
-        logger.info(`Successful deleted temp files (${videoPath}, ${audioPath})`);*/
-        console.log(`${os.EOL}${os.EOL}`);
+        console.log();
     }
 }
 

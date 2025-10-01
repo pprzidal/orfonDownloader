@@ -1,3 +1,7 @@
+import path from "node:path";
+import fs from 'node:fs/promises';
+import os from "node:os";
+
 /**
  * some pretty good garbage code
  * @param adaptionSetRaw 
@@ -73,4 +77,35 @@ export function getFinalFilenames(amount: number, names?: string[], fileNameFrom
 
     }
     return generateArray(amount, fileNameFromIdx);
+}
+
+/**
+ * CURRENTLY NOT USED. Downloads ffmpeg and writes it to a directory for the current user.
+ * @param folderPath 
+ * @returns the path to the freshly installed ffmpeg binary
+ */
+async function installFFMPEG(folderPath: string): Promise<string> {
+    const downloadLinks = {
+        "linux": "https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz",
+        "win32": "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-essentials_build.zip",
+        "darwin": "https://evermeet.cx/pub/ffmpeg/ffmpeg-6.0.zip",
+    };
+
+    if(!["linux", "win32", "darwin"].includes(os.platform())) throw `ORF ON Downloader doesnt support ${os.platform()}`;
+
+    const orfOnDownloaderPath = path.join(os.homedir(), ".orfOnDownloader");
+    await fs.mkdir(orfOnDownloaderPath, { recursive: true });
+
+    const resp = await fetch(downloadLinks[os.platform() as "linux" | "win32" | "darwin"])
+    const ffmpegZip = path.join(orfOnDownloaderPath, "ffmpegDownload");
+    fs.writeFile(ffmpegZip, Buffer.from(await resp.arrayBuffer()));
+
+    // TODO unzip
+    const unpackCommands = {
+        "linux": "https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz",
+        "win32": "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-essentials_build.zip",
+        "darwin": ["unzip", ffmpegZip, "-d", "ffmpeg"],
+    }
+
+    return "";
 }
