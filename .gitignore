@@ -6,3 +6,4 @@ manifest.mpd
 ffmpeg-master-latest-linux64-gpl/*
 bin/*
 dist/*
+.temp/*

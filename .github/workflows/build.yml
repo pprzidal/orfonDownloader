@@ -12,10 +12,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js 22.20
+      - name: Use Node.js 24.13.1
         uses: actions/setup-node@v4
         with:
-          node-version: 22.20
+          node-version: 24.13.1
           cache: 'npm'
       - name: Write commit SHA to package.jsons version field
         run: |
@@ -30,6 +30,10 @@ jobs:
         run: npm run build --if-present
       - name: Package App
         run: npm run package
+      - name: Install ffmpeg
+        run: sudo apt install ffmpeg
+      - name: Smoke Test
+        run: ./bin/orfondownloader-linux --ffmpegPath /usr/bin/ffmpeg --useFFMPEGPipes -o ottoWalkesZIB.mp4 -o budSpencerZIB.mp4 https://on.orf.at/video/7982416/otto-waalkes-in-wien https://on.orf.at/video/13113850/bud-spencer-und-terence-hill-ueber-ihre-karrieren
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
